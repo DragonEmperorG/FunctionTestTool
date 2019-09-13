@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">calculation</string>
+    <string name="button_spectrum_calculation">SpectrumCal</string>
+    <string name="button_matrix_calculation">MatrixCal</string>
+</resources>
