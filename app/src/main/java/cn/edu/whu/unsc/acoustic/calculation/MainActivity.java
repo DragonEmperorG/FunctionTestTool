@@ -52,7 +52,8 @@ public class MainActivity extends AppCompatActivity {
                 double[][] mTransposeDS = new double[25][513];
                 for (int tRow = 0; tRow < mRows; tRow++) {
                     for (int tColumn = 0; tColumn < mColumns; tColumn++) {
-                        mTransposeDS[tRow][tColumn] =tDS[tColumn][tRow];
+//                        mTransposeDS[tRow][tColumn] =tDS[tColumn][tRow];
+                        mTransposeDS[tRow][tColumn] =tDS[tRow][tColumn];
                     }
                 }
 
@@ -61,8 +62,9 @@ public class MainActivity extends AppCompatActivity {
                     tInputDS.add(mTransposeDS[tRow]);
                 }
 
-                double[] tVisualDetector = calculateSpectrogram(tInputDS, mRows, mColumns);
-                calculateTimestamp(5, tVisualDetector[0], (int) tVisualDetector[1]);
+                double[] tVisualDetector1 = detectChirp(tInputDS, mRows, mColumns, 1);
+                double[] tVisualDetector2 = detectChirp(tInputDS, mRows, mColumns, 2);
+//                calculateTimestamp(5, tVisualDetector[0], (int) tVisualDetector[1]);
 
             }
         });
@@ -80,8 +82,8 @@ public class MainActivity extends AppCompatActivity {
 
     private double[][] loadDataSets() {
 
-        mRows = 513;
-        mColumns = 25;
+        mRows = 25;
+        mColumns = 513;
 
         double[][] mDataSets = new double[mRows][mColumns];
 
@@ -92,7 +94,7 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG, "directoryCreationStatus: " + directoryCreationStatus);
         }
 
-        File mSpectrogramFile = new File(mDataSetsFileDir, "2007P1W5.csv");
+        File mSpectrogramFile = new File(mDataSetsFileDir, "Matrix25.csv");
 
         if (mSpectrogramFile.exists()) {
             try {
@@ -100,9 +102,10 @@ public class MainActivity extends AppCompatActivity {
                 Scanner tScanner = new Scanner(tFileInputStream, "UTF-8");
                 int tRowsCounter = 0;
                 while (tScanner.hasNextLine()) {
-                    String[] tLine = tScanner.nextLine().split(",");
+                    String[] tLine = tScanner.nextLine().split(" ,");
                     for (int tColumnsCounter = 0; tColumnsCounter < mColumns; tColumnsCounter++) {
-                        mDataSets[tRowsCounter][tColumnsCounter] = Double.valueOf(tLine[tColumnsCounter]);
+                        String tString = tLine[tColumnsCounter];
+                        mDataSets[tRowsCounter][tColumnsCounter] = Double.valueOf(tString);
                     }
                     tRowsCounter++;
                 }
@@ -145,61 +148,79 @@ public class MainActivity extends AppCompatActivity {
             }
     }
 
-    private double[] calculateSpectrogram(final ArrayList<double[]> SlideWindow, final int pRows, final int pColumns) {
-        long tTimeCounterS = System.currentTimeMillis();
+    private double[] detectChirp(final ArrayList<double[]> timeFrequenceMatrix, final int rows, final int columns, final int frequenceBandFlag) {
+        long timeCounter = System.currentTimeMillis();
 
         // Chirp Features
-        double mChirpLength = 0.045;
-        double mFrequency16kHz = 16;
-        double mFrequency21kHz = 21;
+        final double chirpLength = 0.050;    // TODO: 0.045
+        final double frequency15kHz = 15000.0;
+        final double frequency18kHz = 18000.0;
+        final double frequency19kHz = 19000.0;
+        final double frequency22kHz = 22000.0;
 
         // Detection Parameters
-        int FFTLength = 1024;
-        int HopLength = 128;
-        int FFTWinSize = 4096;
-        int timeResolutionRatio = (FFTWinSize - FFTLength) / HopLength + 1;
-        int freqResolutionRatio = (FFTLength / 2) + 1;
-        double mSampleRate = 44100.0;
-        double mTimeInterval = HopLength / mSampleRate;
-        double mFrequenceInterval = mSampleRate / FFTLength;
+        final int skipThreshold = 5;
+        final double bufferThreshold = 1.5;
+        final double gradientThreshold = 10.0;
 
-        int mInterceptIndex = 5;
-        int mMinIndex = 1 + mInterceptIndex;
-        int mMaxIndex = 40 - mInterceptIndex;
-        int mFreq0 = 372;
-        int mFreq1 = 488;
+        // STFT Parameters
+        final int fftWindowLength = 4096;
+        final int fftLength = 1024;
+        final int hopLength = 128;
+        final int timeResolutionDiscrete = (fftWindowLength - fftLength) / hopLength + 1;
+        final int freqResolutionDiscrete = (fftLength / 2) + 1;
+        final double timeResolutionContinuous = timeResolutionDiscrete - 1.0;
+        final double freqResolutionContinuous = freqResolutionDiscrete - 1.0;
+        final double sampleRate = 44100.0;
+        final double timeResolutionInterval = hopLength / sampleRate;
+        final double freqResolutionInterval = sampleRate / fftLength;
+        final double freqResolutionIntervalInverse = fftLength / sampleRate;
 
-        double mDetLineDistance = 1.5;
-        double mDetLineThreshold = 10.0;
+        final int freq15kDiscrete = (int) Math.round(frequency15kHz * freqResolutionIntervalInverse) + 1;    // 348 + 1
+        final int freq18kDiscrete = (int) Math.round(frequency18kHz * freqResolutionIntervalInverse) + 1;    // 418 + 1
+        final int freq19kDiscrete = (int) Math.round(frequency19kHz * freqResolutionIntervalInverse) + 1;    // 441 + 1
+        final int freq22kDiscrete = (int) Math.round(frequency22kHz * freqResolutionIntervalInverse) + 1;    // 511 + 1
 
-        double[] m21kPoint = new double[2];
-        double[] m16kPoint = new double[2];
-        double[] mbIntercept = new double[2];
-        double[] mBIntercept = new double[2];
+        int freqLowerBoundDiscrete = -1;
+        int freqUpperBoundDiscrete = -1;
+        double chirpTimeFraction = chirpLength / timeResolutionInterval;
+        double chirpFreqFraction = -1.0;
+        double chirpTime2FreqRatio;
+        int chirpTimeDiscrete = (int) Math.round(chirpTimeFraction);
+        int detectorBoxTimeLowerBoundDiscrete = 0;
+        int detectorBoxTimeUpperBoundDiscrete = (int) timeResolutionContinuous;
+        int detectorBoxFreqLowerBoundDiscrete = 0;
+        int detectorBoxFreqUpperBoundDiscrete = 0;
 
-        m21kPoint[0] = Math.round(mFrequency21kHz * 1000 / mFrequenceInterval) - mFreq0;
-        m21kPoint[1] = 0.0;
-        m16kPoint[0] = Math.round(mFrequency16kHz * 1000 / mFrequenceInterval) - mFreq0;
-        m16kPoint[1] = Math.round((0.081269841269841 - 0.011609977324263) / mTimeInterval);
+        if (frequenceBandFlag == 1) {
+            chirpFreqFraction = (frequency18kHz - frequency15kHz) * freqResolutionIntervalInverse;
+            freqLowerBoundDiscrete = freq15kDiscrete;
+            freqUpperBoundDiscrete = freq18kDiscrete;
+            detectorBoxFreqUpperBoundDiscrete = freq18kDiscrete - freq15kDiscrete;
+        } else if (frequenceBandFlag == 2) {
+            chirpFreqFraction = (frequency22kHz - frequency19kHz) * freqResolutionIntervalInverse;
+            freqLowerBoundDiscrete = freq19kDiscrete;
+            freqUpperBoundDiscrete = freq22kDiscrete;
+            detectorBoxFreqUpperBoundDiscrete = freq22kDiscrete - freq19kDiscrete;
+        }
+        chirpTime2FreqRatio = chirpTimeFraction / chirpFreqFraction;
 
-        double mTimeNum = mChirpLength / mTimeInterval;
-        double mFrequenceNum = (mFrequency21kHz - mFrequency16kHz) * 1000 / mFrequenceInterval;
-        double mTime2FreqRatio = mTimeNum / mFrequenceNum;
+        int chirpPositiveSlopeTimeLowerBoundDiscrete = detectorBoxTimeLowerBoundDiscrete - chirpTimeDiscrete;
+        int chirpPositiveSlopeTimeUpperBoundDiscrete = detectorBoxTimeUpperBoundDiscrete;
+        int chirpNegativeSlopeTimeLowerBoundDiscrete = detectorBoxTimeLowerBoundDiscrete;
+        int chirpNegativeSlopeTimeUpperBoundDiscrete = detectorBoxTimeUpperBoundDiscrete + chirpTimeDiscrete;
 
-        mbIntercept[0] = m21kPoint[1] - mTime2FreqRatio * m21kPoint[0];
-        mbIntercept[1] = m16kPoint[1] - mTime2FreqRatio * m16kPoint[0];
-        mBIntercept[0] = m21kPoint[1] + mTime2FreqRatio * m16kPoint[0];
-        mBIntercept[1] = m16kPoint[1] + mTime2FreqRatio * m21kPoint[0];
-
+        double chirpPositiveSlopeTimeLowerBoundContinuous = detectorBoxTimeLowerBoundDiscrete - chirpTime2FreqRatio * detectorBoxFreqUpperBoundDiscrete;
+        double chirpNegativeSlopeTimeLowerBoundContinuous = detectorBoxTimeLowerBoundDiscrete;
         double mMinSpectrogram = Double.MAX_VALUE;
         double mMaxSpectrogram = Double.MIN_VALUE;
 
-        double mEpsilon = 2.2204e-16;
-        double[][] tTransposeDS = new double[timeResolutionRatio][freqResolutionRatio];
-        for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-            for (int tColumn = 0; tColumn < freqResolutionRatio; tColumn++) {
-                double tElement = SlideWindow.get(tRow)[tColumn];
-                tTransposeDS[tRow][tColumn] = Math.abs(10.0 * Math.log10(Math.abs(tElement) + mEpsilon));
+        final double EPSILON = 2.2204e-16;
+        double[][] tTransposeDS = new double[timeResolutionDiscrete][freqResolutionDiscrete];
+        for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+            for (int tColumn = 0; tColumn < freqResolutionDiscrete; tColumn++) {
+                double tElement = timeFrequenceMatrix.get(tRow)[tColumn];
+                tTransposeDS[tRow][tColumn] = Math.abs(10.0 * Math.log10(Math.abs(tElement) + EPSILON));
                 if (tTransposeDS[tRow][tColumn] < mMinSpectrogram) {
                     mMinSpectrogram = tTransposeDS[tRow][tColumn];
                 }
@@ -209,158 +230,181 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        double[][] tFlipudDS = new double[timeResolutionRatio][freqResolutionRatio];
-        for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-            for (int tColumn = 0; tColumn < freqResolutionRatio; tColumn++) {
-                tFlipudDS[tRow][tColumn] = tTransposeDS[timeResolutionRatio - tRow - 1][tColumn];
+        double[][] tFlipudDS = new double[timeResolutionDiscrete][freqResolutionDiscrete];
+        for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+            for (int tColumn = 0; tColumn < freqResolutionDiscrete; tColumn++) {
+                tFlipudDS[tRow][tColumn] = tTransposeDS[timeResolutionDiscrete - tRow - 1][tColumn];
             }
         }
 
-        double mDetSpectrogram = 1.0 / (mMaxSpectrogram - mMinSpectrogram)  * 255;
-        double[][] tNormalizedDS = new double[timeResolutionRatio][freqResolutionRatio];
-        for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-            for (int tColumn = 0; tColumn < freqResolutionRatio; tColumn++) {
+        double mDetSpectrogram = 255.0 / (mMaxSpectrogram - mMinSpectrogram);
+        double[][] tNormalizedDS = new double[timeResolutionDiscrete][freqResolutionDiscrete];
+        for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+            for (int tColumn = 0; tColumn < freqResolutionDiscrete; tColumn++) {
                 tNormalizedDS[tRow][tColumn] = (tFlipudDS[tRow][tColumn] - mMinSpectrogram) * mDetSpectrogram;
             }
         }
 
-        //
-        double[][] tFlipudDSSlice = new double[timeResolutionRatio][mFreq1 - mFreq0 + 1];
-        for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-            for (int tColumn = 0; tColumn < mFreq1 - mFreq0 + 1; tColumn++) {
-                tFlipudDSSlice[tRow][tColumn] = tNormalizedDS[tRow][mFreq0 + tColumn - 1];
+        // TODO: whether detectorFreqDiscrete should + 1
+        int detectorFreqDiscrete = freqUpperBoundDiscrete - freqLowerBoundDiscrete;
+        double[][] tFlipudDSSlice = new double[timeResolutionDiscrete][detectorFreqDiscrete];
+        for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+            for (int tColumn = 0; tColumn < detectorFreqDiscrete; tColumn++) {
+                tFlipudDSSlice[tRow][tColumn] = tNormalizedDS[tRow][freqLowerBoundDiscrete - 1 + tColumn];
             }
         }
 
         //
-        int mMinRIntercept = -16;
-        int mMaxRIntercept = 24;
-        double[][] tSpectroRSta = new double[mMaxRIntercept - mMinRIntercept + 1][4];
-        for (int tRow = 0; tRow < mMaxRIntercept - mMinRIntercept + 1; tRow++) {
+        // Positive slope chirp detector
+        //
+        int minTimeIntercept = chirpPositiveSlopeTimeLowerBoundDiscrete;
+        int maxTimeIntercept = chirpPositiveSlopeTimeUpperBoundDiscrete;
+        int detectorTimeDiscrete = maxTimeIntercept - minTimeIntercept + 1;
+        double[][] tSpectroPositiveSta = new double[detectorTimeDiscrete][4];
+        for (int tRow = 0; tRow < detectorTimeDiscrete; tRow++) {
             for (int tColumn = 0; tColumn < 4; tColumn++) {
-                tSpectroRSta[tRow][tColumn] = 0.0;
+                tSpectroPositiveSta[tRow][tColumn] = 0.0;
             }
         }
-        for (int tb = mMinRIntercept; tb <= mMaxRIntercept; tb++) {
-            for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-                for (int tColumn = 0; tColumn < mFreq1 - mFreq0 + 1; tColumn++) {
-                    double tDistance = Math.abs((timeResolutionRatio - tRow - 1) - (tColumn + 1 - 1) * mTime2FreqRatio - tb) / Math.sqrt(1.0 + mTime2FreqRatio * mTime2FreqRatio);
-                    if (tDistance < mDetLineDistance) {
-                        tSpectroRSta[tb - mMinRIntercept][0] += tFlipudDSSlice[tRow][tColumn];
-                        tSpectroRSta[tb - mMinRIntercept][1] += 1;
-                        tSpectroRSta[tb - mMinRIntercept][2] = tSpectroRSta[tb - mMinRIntercept][0] / tSpectroRSta[tb - mMinRIntercept][1];
+        double divisorInv = 1.0 / Math.sqrt(1.0 + chirpTime2FreqRatio * chirpTime2FreqRatio);
+        for (int timeIntercept = minTimeIntercept; timeIntercept <= maxTimeIntercept; timeIntercept++) {
+            for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+                for (int tColumn = 0; tColumn < detectorFreqDiscrete; tColumn++) {
+                    double tDistance = Math.abs((timeResolutionDiscrete - (tRow + 1)) - ((tColumn + 1) - 1) * chirpTime2FreqRatio - timeIntercept) * divisorInv;
+                    if (tDistance < bufferThreshold) {
+                        tSpectroPositiveSta[timeIntercept - minTimeIntercept][0] += tFlipudDSSlice[tRow][tColumn];
+                        tSpectroPositiveSta[timeIntercept - minTimeIntercept][1] += 1.0;
+                        tSpectroPositiveSta[timeIntercept - minTimeIntercept][2] = tSpectroPositiveSta[timeIntercept - minTimeIntercept][0] / tSpectroPositiveSta[timeIntercept - minTimeIntercept][1];
                     }
 //                    Log.i(TAG, "tDistance: " + tDistance);
                 }
             }
         }
-        for (int tb = 0; tb < mMaxRIntercept - mMinRIntercept; tb++) {
-            tSpectroRSta[tb][3] = Math.abs(tSpectroRSta[tb + 1][2] - tSpectroRSta[tb][2]);
+        for (int i = 0; i < maxTimeIntercept - minTimeIntercept; i++) {
+            tSpectroPositiveSta[i][3] = Math.abs(tSpectroPositiveSta[i + 1][2] - tSpectroPositiveSta[i][2]);
         }
-
-        double[] tSpectroRDet = new double[mMaxIndex - mMinIndex + 1];
-        for (int tb = 0; tb < mMaxIndex - mMinIndex + 1; tb++) {
-            tSpectroRDet[tb] = tSpectroRSta[tb + mMinIndex - 1][3];
+        int minSkipTimeIntercept = 1 + skipThreshold;
+        int maxSkipTimeIntercept = detectorTimeDiscrete - skipThreshold;
+        int skipTimeDiscrete = maxSkipTimeIntercept - minSkipTimeIntercept + 1;
+        double[] tSpectroPositiveDet = new double[skipTimeDiscrete];
+        for (int i = 0; i < skipTimeDiscrete; i++) {
+            tSpectroPositiveDet[i] = tSpectroPositiveSta[i + minSkipTimeIntercept - 1][3];
         }
 
 
         //
-        int mMinLIntercept = 0;
-        int mMaxLIntercept = 40;
-        double[][] tSpectroLSta = new double[mMaxLIntercept - mMinLIntercept + 1][4];
-        for (int tRow = 0; tRow < mMaxLIntercept - mMinLIntercept + 1; tRow++) {
+        // Negative slope chirp detector
+        //
+        minTimeIntercept = chirpNegativeSlopeTimeLowerBoundDiscrete;
+        maxTimeIntercept = chirpNegativeSlopeTimeUpperBoundDiscrete;
+        detectorTimeDiscrete = maxTimeIntercept - minTimeIntercept + 1;
+        double[][] tSpectroNegativeSta = new double[detectorTimeDiscrete][4];
+        for (int tRow = 0; tRow < maxTimeIntercept - minTimeIntercept + 1; tRow++) {
             for (int tColumn = 0; tColumn < 4; tColumn++) {
-                tSpectroLSta[tRow][tColumn] = 0.0;
+                tSpectroNegativeSta[tRow][tColumn] = 0.0;
             }
         }
-        for (int tb = mMinLIntercept; tb <= mMaxLIntercept; tb++) {
-            for (int tRow = 0; tRow < timeResolutionRatio; tRow++) {
-                for (int tColumn = 0; tColumn < mFreq1 - mFreq0 + 1; tColumn++) {
-                    double tDistance = Math.abs((timeResolutionRatio - tRow - 1) + (tColumn + 1 - 1) * mTime2FreqRatio - tb) / Math.sqrt(1.0 + mTime2FreqRatio * mTime2FreqRatio);
-                    if (tDistance < mDetLineDistance) {
-                        tSpectroLSta[tb - mMinLIntercept][0] += tFlipudDSSlice[tRow][tColumn];
-                        tSpectroLSta[tb - mMinLIntercept][1] += 1;
-                        tSpectroLSta[tb - mMinLIntercept][2] = tSpectroLSta[tb - mMinLIntercept][0] / tSpectroLSta[tb - mMinLIntercept][1];
+        for (int timeIntercept = minTimeIntercept; timeIntercept <= maxTimeIntercept; timeIntercept++) {
+            for (int tRow = 0; tRow < timeResolutionDiscrete; tRow++) {
+                for (int tColumn = 0; tColumn < detectorFreqDiscrete; tColumn++) {
+                    double tDistance = Math.abs((timeResolutionDiscrete - (tRow + 1)) + ((tColumn + 1) - 1) * chirpTime2FreqRatio - timeIntercept) * divisorInv;
+                    if (tDistance < bufferThreshold) {
+                        tSpectroNegativeSta[timeIntercept - minTimeIntercept][0] += tFlipudDSSlice[tRow][tColumn];
+                        tSpectroNegativeSta[timeIntercept - minTimeIntercept][1] += 1.0;
+                        tSpectroNegativeSta[timeIntercept - minTimeIntercept][2] = tSpectroNegativeSta[timeIntercept - minTimeIntercept][0] / tSpectroNegativeSta[timeIntercept - minTimeIntercept][1];
                     }
 //                    Log.i(TAG, "tDistance: " + tDistance);
                 }
             }
         }
-        for (int tb = 0; tb < mMaxLIntercept - mMinLIntercept; tb++) {
-            tSpectroLSta[tb][3] = Math.abs(tSpectroLSta[tb + 1][2] - tSpectroLSta[tb][2]);
+        for (int i = 0; i < maxTimeIntercept - minTimeIntercept; i++) {
+            tSpectroNegativeSta[i][3] = Math.abs(tSpectroNegativeSta[i + 1][2] - tSpectroNegativeSta[i][2]);
         }
-
-        double[] tSpectroLDet = new double[mMaxIndex - mMinIndex + 1];
-        for (int tb = 0; tb < mMaxIndex - mMinIndex + 1; tb++) {
-            tSpectroLDet[tb] = tSpectroLSta[tb + mMinIndex - 1][3];
+        double[] tSpectroNegativeDet = new double[skipTimeDiscrete];
+        for (int i = 0; i < skipTimeDiscrete; i++) {
+            tSpectroNegativeDet[i] = tSpectroNegativeSta[i + minSkipTimeIntercept - 1][3];
         }
-
-        /*
-         *
-         */
-        double tMaxSpectroRDet = 0.0;
-        int tMaxSpectroRDetInd = 0;
-        for (int tCounter = 0; tCounter < mMaxRIntercept - mMinRIntercept; tCounter++) {
-            if (tSpectroRSta[tCounter][3] > tMaxSpectroRDet) {
-                tMaxSpectroRDet = tSpectroRSta[tCounter][3];
-                tMaxSpectroRDetInd = tCounter;
-            }
-        }
-
-        double tMaxSpectroRDetPart = 0.0;
-        int tMaxSpectroRDetIndPart = 0;
-        for (int tCounter = 0; tCounter < mMaxIndex - mMinIndex + 1; tCounter++) {
-            if (tSpectroRDet[tCounter] > tMaxSpectroRDetPart) {
-                tMaxSpectroRDetPart = tSpectroRDet[tCounter];
-                tMaxSpectroRDetIndPart = tCounter;
-            }
-        }
-
-
-        double tMaxSpectroLDet = 0.0;
-        int tMaxSpectroLDetInd = 0;
-        for (int tCounter = 0; tCounter < mMaxRIntercept - mMinRIntercept; tCounter++) {
-            if (tSpectroLSta[tCounter][3] > tMaxSpectroLDet) {
-                tMaxSpectroLDet = tSpectroLSta[tCounter][3];
-                tMaxSpectroLDetInd = tCounter;
-            }
-        }
-
-        double tMaxSpectroLDetPart = 0.0;
-        int tMaxSpectroLDetIndPart = 0;
-        for (int tCounter = 0; tCounter < mMaxIndex - mMinIndex + 1; tCounter++) {
-            if (tSpectroLDet[tCounter] > tMaxSpectroLDetPart) {
-                tMaxSpectroLDetPart = tSpectroLDet[tCounter];
-                tMaxSpectroLDetIndPart = tCounter;
-            }
-        }
-
 
         //
-        int tClass = -2;
-        double tInterceptEst = -1.0;
-        if (tMaxSpectroRDetPart < mDetLineThreshold && tMaxSpectroLDetPart < mDetLineThreshold) {
+        //
+        //
+        double tMaxSpectroPositiveDet = 0.0;
+        int tMaxSpectroPositiveDetInd = 0;
+        for (int tCounter = 0; tCounter < maxTimeIntercept - minTimeIntercept; tCounter++) {
+            if (tSpectroPositiveSta[tCounter][3] > tMaxSpectroPositiveDet) {
+                tMaxSpectroPositiveDet = tSpectroPositiveSta[tCounter][3];
+                tMaxSpectroPositiveDetInd = tCounter;
+            }
+        }
+
+        double tMaxSpectroPositiveDetPart = 0.0;
+        int tMaxSpectroPositiveDetIndPart = 0;
+        for (int tCounter = 0; tCounter < skipTimeDiscrete; tCounter++) {
+            if (tSpectroPositiveDet[tCounter] > tMaxSpectroPositiveDetPart) {
+                tMaxSpectroPositiveDetPart = tSpectroPositiveDet[tCounter];
+                tMaxSpectroPositiveDetIndPart = tCounter;
+            }
+        }
+
+
+        double tMaxSpectroNegativeDet = 0.0;
+        int tMaxSpectroNegativeDetInd = 0;
+        for (int tCounter = 0; tCounter < maxTimeIntercept - minTimeIntercept; tCounter++) {
+            if (tSpectroNegativeSta[tCounter][3] > tMaxSpectroNegativeDet) {
+                tMaxSpectroNegativeDet = tSpectroNegativeSta[tCounter][3];
+                tMaxSpectroNegativeDetInd = tCounter;
+            }
+        }
+
+        double tMaxSpectroNegativeDetPart = 0.0;
+        int tMaxSpectroNegativeDetIndPart = 0;
+        for (int tCounter = 0; tCounter < skipTimeDiscrete; tCounter++) {
+            if (tSpectroNegativeDet[tCounter] > tMaxSpectroNegativeDetPart) {
+                tMaxSpectroNegativeDetPart = tSpectroNegativeDet[tCounter];
+                tMaxSpectroNegativeDetIndPart = tCounter;
+            }
+        }
+
+
+        // Output detector result
+        int detectorIndex = 0;
+        int tClass = -1;
+        double tInterceptEst = -128.0;
+        if (tMaxSpectroPositiveDetPart < gradientThreshold && tMaxSpectroNegativeDetPart < gradientThreshold) {
+            tClass = 0;
             tInterceptEst = 0.0;
-//            tClass = 0;
-            tClass = -999;
-
-        } else if (tMaxSpectroLDetPart > tMaxSpectroRDetPart) {
-            tInterceptEst = tMaxSpectroLDetInd + 1 + mBIntercept[0] + mTime2FreqRatio * mFreq0;
-//            tClass = -1;
-            tClass = 1;
-
-        } else if (tMaxSpectroLDetPart < tMaxSpectroRDetPart) {
-            tInterceptEst = tMaxSpectroRDetInd + 1 + mbIntercept[0] - mTime2FreqRatio * mFreq0;
-//            tClass = 1;
-            tClass = 2;
+        } else if (tMaxSpectroNegativeDetPart > tMaxSpectroPositiveDetPart) {
+            if (tMaxSpectroNegativeDet == tMaxSpectroNegativeDetPart) {
+                detectorIndex = tMaxSpectroNegativeDetInd;
+            }else {
+                detectorIndex = minSkipTimeIntercept + tMaxSpectroNegativeDetIndPart - 1;
+            }
+            tInterceptEst = detectorIndex + 1 + chirpNegativeSlopeTimeLowerBoundContinuous + chirpTime2FreqRatio * freqLowerBoundDiscrete;
+            if (frequenceBandFlag == 1) {
+                tClass = 1;
+            } else if (frequenceBandFlag == 2) {
+                tClass = 3;
+            }
+        } else if (tMaxSpectroNegativeDetPart < tMaxSpectroPositiveDetPart) {
+            if (tMaxSpectroPositiveDet == tMaxSpectroPositiveDetPart) {
+                detectorIndex = tMaxSpectroPositiveDetInd;
+            } else {
+                detectorIndex = minSkipTimeIntercept + tMaxSpectroPositiveDetIndPart - 1;
+            }
+            tInterceptEst = detectorIndex + 1 + chirpPositiveSlopeTimeLowerBoundContinuous - chirpTime2FreqRatio * freqLowerBoundDiscrete;
+            if (frequenceBandFlag == 1) {
+                tClass = 2;
+            } else if (frequenceBandFlag == 2) {
+                tClass = 4;
+            }
         }
 
-        long tTimeDuration = System.currentTimeMillis() - tTimeCounterS;
+        long tTimeDuration = System.currentTimeMillis() - timeCounter;
 
         Log.i(TAG, "Estimation: " + tInterceptEst + ":" + tClass);
         Log.i(TAG, "CalculationDuration: " + tTimeDuration);
 
-        return new double[] { tInterceptEst, tClass};
+        return new double[] { tClass, tInterceptEst };
     }
 
     private double[] calculateTimestamp(final int pWindowIndex, final double pIntercept, final double pType) {
