@@ -63,8 +63,9 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 double[] tVisualDetector1 = detectChirp(tInputDS, mRows, mColumns, 1);
+                calculateTimestamp(4, tVisualDetector1[1], (int) tVisualDetector1[0]);
                 double[] tVisualDetector2 = detectChirp(tInputDS, mRows, mColumns, 2);
-//                calculateTimestamp(5, tVisualDetector[0], (int) tVisualDetector[1]);
+                calculateTimestamp(4, tVisualDetector2[1], (int) tVisualDetector2[0]);
 
             }
         });
@@ -94,7 +95,7 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG, "directoryCreationStatus: " + directoryCreationStatus);
         }
 
-        File mSpectrogramFile = new File(mDataSetsFileDir, "Matrix25.csv");
+        File mSpectrogramFile = new File(mDataSetsFileDir, "ZL40mMatrix4.csv");
 
         if (mSpectrogramFile.exists()) {
             try {
@@ -152,7 +153,7 @@ public class MainActivity extends AppCompatActivity {
         long timeCounter = System.currentTimeMillis();
 
         // Chirp Features
-        final double chirpLength = 0.050;    // TODO: 0.045
+        final double chirpLength = 0.045;    // TODO: 0.045
         final double frequency15kHz = 15000.0;
         final double frequency18kHz = 18000.0;
         final double frequency19kHz = 19000.0;
@@ -402,49 +403,63 @@ public class MainActivity extends AppCompatActivity {
         long tTimeDuration = System.currentTimeMillis() - timeCounter;
 
         Log.i(TAG, "Estimation: " + tInterceptEst + ":" + tClass);
-        Log.i(TAG, "CalculationDuration: " + tTimeDuration);
+        Log.d(TAG, "CalculationDuration: " + tTimeDuration);
 
         return new double[] { tClass, tInterceptEst };
     }
 
-    private double[] calculateTimestamp(final int pWindowIndex, final double pIntercept, final double pType) {
+    private double[] calculateTimestamp(final int windowIndex, final double intercept, final int chirpFlag) {
 
-        int FFTLength = 1024;
+        // Chirp Features
+        final double chirpLength = 0.045;
+        final double frequency15kHz = 15000.0;
+        final double frequency18kHz = 18000.0;
+        final double frequency19kHz = 19000.0;
 
-        double rTimeStamp = -1.0;
-        double tType = -999.0;
+        // STFT Parameters
+        final int fftWindowLength = 4096;
+        final int fftLength = 1024;
+        final int hopLength = 128;
+        final double sampleRate = 44100.0;
+        final double timeResolutionInterval = hopLength / sampleRate;
+        final double freqResolutionIntervalInverse = fftLength / sampleRate;
 
-        if (pType == 1.0) {
-            tType = -1.0;
-        } else if (pType == 2.0) {
-            tType = 1.0;
+        final int freq15kDiscrete = (int) Math.round(frequency15kHz * freqResolutionIntervalInverse) + 1;    // 348 + 1
+        final int freq19kDiscrete = (int) Math.round(frequency19kHz * freqResolutionIntervalInverse) + 1;    // 441 + 1
+
+        double chirpTimeFraction = chirpLength / timeResolutionInterval;
+        double chirpFreqFraction = -1.0;
+        double chirpTime2FreqRatio;
+
+        chirpFreqFraction = (frequency18kHz - frequency15kHz) * freqResolutionIntervalInverse;
+        chirpTime2FreqRatio = chirpTimeFraction / chirpFreqFraction;
+
+        double m0TimeAxis = (fftLength / 2) / sampleRate;
+        double rTimeStamp = 0.0;
+
+        double chirpDelayRefWindow;
+        double windowDelayRefTimeAxis = (((windowIndex - 1) * (fftLength * 4 - 896 - 128 * 9)) + 1) / sampleRate;
+
+        switch (chirpFlag) {
+            case 1:
+                chirpDelayRefWindow = ((-1) * chirpTime2FreqRatio * freq15kDiscrete + intercept) * timeResolutionInterval + m0TimeAxis;
+                rTimeStamp = windowDelayRefTimeAxis + chirpDelayRefWindow - chirpLength;
+                break;
+            case 2:
+                chirpDelayRefWindow = ((+1) * chirpTime2FreqRatio * freq15kDiscrete + intercept) * timeResolutionInterval + m0TimeAxis;
+                rTimeStamp = windowDelayRefTimeAxis + chirpDelayRefWindow;
+                break;
+            case 3:
+                chirpDelayRefWindow = ((-1) * chirpTime2FreqRatio * freq19kDiscrete + intercept) * timeResolutionInterval + m0TimeAxis;
+                rTimeStamp = windowDelayRefTimeAxis + chirpDelayRefWindow - chirpLength;
+                break;
+            case 4:
+                chirpDelayRefWindow = ((+1) * chirpTime2FreqRatio * freq19kDiscrete + intercept) * timeResolutionInterval + m0TimeAxis;
+                rTimeStamp = windowDelayRefTimeAxis + chirpDelayRefWindow;
+                break;
         }
 
-        double tSampleRate = 44100.0;
-        double mWindowSize = 1024.0;
-        double mStepSize = 128.0;
-
-        double mTimeInterval = mStepSize / tSampleRate;
-        double mFrequenceInterval = (tSampleRate / 2) / (mWindowSize / 2);
-
-        double mChirpLength = 0.045;
-        double mFrequency0KHz = 16;
-        double mFrequency1KHz = 21;
-        double mTimeNum = mChirpLength / mTimeInterval;
-        double mFrequenceNum = (mFrequency1KHz - mFrequency0KHz) * 1000 / mFrequenceInterval;
-        double mTime2FreqRatio = mTimeNum / mFrequenceNum;
-
-        double m0TimeAxis = (mWindowSize / 2) / tSampleRate;
-        double m16KFrequenceAxis = Math.ceil((mFrequency0KHz * 1000) / (tSampleRate / 2) * (mWindowSize / 2));
-
-        double tTimeDeley4Window = (tType * mTime2FreqRatio * m16KFrequenceAxis + pIntercept) * mTimeInterval + m0TimeAxis;
-        double tWindowDeley4TA = (((pWindowIndex - 1) * (FFTLength * 4 - 896 - 128 * 9)) + 1) / tSampleRate;
-
-        if (pType == 1.0) {
-            rTimeStamp = tTimeDeley4Window + tWindowDeley4TA - mChirpLength;
-        } else if (pType == 2.0) {
-            rTimeStamp = tTimeDeley4Window + tWindowDeley4TA;
-        }
+        Log.i(TAG, "EstimationTimeStamp: " + rTimeStamp + ":" + chirpFlag);
 
         return new double[] {rTimeStamp, -1.0};
     }
