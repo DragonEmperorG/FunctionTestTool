@@ -53,7 +53,7 @@ public class MainActivity extends AppCompatActivity {
                 for (int tRow = 0; tRow < mRows; tRow++) {
                     for (int tColumn = 0; tColumn < mColumns; tColumn++) {
 //                        mTransposeDS[tRow][tColumn] =tDS[tColumn][tRow];
-                        mTransposeDS[tRow][tColumn] =tDS[tRow][tColumn];
+                        mTransposeDS[tRow][tColumn] = tDS[tRow][tColumn];
                     }
                 }
 
@@ -74,7 +74,23 @@ public class MainActivity extends AppCompatActivity {
         mMatrixCalButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 // Code here executes on main thread after user presses button
+                loop1:
+                for (int x = 0; x < 4; x++) {
+                    boolean flag = true;
 
+                    loop2:
+                    for (int y = 0; y < 5; y++) {
+                        if (x == 2) {
+                            flag = false;
+                            break;
+                        }
+                        Log.i(TAG, "Loop: " + "x=" + x + ",y=" + y);
+                    }
+
+                    if (flag) {
+                        Log.i(TAG, "Loop: " + "x=" + x);
+                    }
+                }
 
             }
         });
@@ -110,7 +126,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     tRowsCounter++;
                 }
-            }  catch (Exception e) {
+            } catch (Exception e) {
                 e.printStackTrace();
             }
 
@@ -377,7 +393,7 @@ public class MainActivity extends AppCompatActivity {
         } else if (tMaxSpectroNegativeDetPart > tMaxSpectroPositiveDetPart) {
             if (tMaxSpectroNegativeDet == tMaxSpectroNegativeDetPart) {
                 detectorIndex = tMaxSpectroNegativeDetInd;
-            }else {
+            } else {
                 detectorIndex = minSkipTimeIntercept + tMaxSpectroNegativeDetIndPart - 1;
             }
             tInterceptEst = detectorIndex + 1 + chirpNegativeSlopeTimeLowerBoundContinuous + chirpTime2FreqRatio * freqLowerBoundDiscrete;
@@ -405,7 +421,7 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG, "Estimation: " + tInterceptEst + ":" + tClass);
         Log.d(TAG, "CalculationDuration: " + tTimeDuration);
 
-        return new double[] { tClass, tInterceptEst };
+        return new double[]{tClass, tInterceptEst};
     }
 
     private double[] calculateTimestamp(final int windowIndex, final double intercept, final int chirpFlag) {
@@ -461,7 +477,7 @@ public class MainActivity extends AppCompatActivity {
 
         Log.i(TAG, "EstimationTimeStamp: " + rTimeStamp + ":" + chirpFlag);
 
-        return new double[] {rTimeStamp, -1.0};
+        return new double[]{rTimeStamp, -1.0};
     }
 
 }
